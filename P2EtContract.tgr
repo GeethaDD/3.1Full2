@@ -1,0 +1,122 @@
+trigger P2EtContract on Contract (before insert, before delete, before update,after update) {//Added before insert for PC-12992
+    //-- Added the logic for Heat:1740298
+    //Modified By: Parthiban P, Modified on 18-03-2016
+    //Added for PC-12992 by Parthi
+    
+    
+    if((!SkipTriggerUtil.isSkipTrigger()) &&  (!SkipTriggerUtil.isSkipValidationRule()) && trigger.isUpdate && trigger.isAfter) {
+        GChObjectTriggerHelper.validateGetBPIdOnSubmitForApproval(trigger.new,trigger.newMap.keySet());
+    }        
+    if (!SkipTriggerUtil.isSkipTrigger()) {
+        String approvalstatusold;
+        String approvalstatusnew;
+        List<Contract> newContractlist = new List<Contract>();
+        if(trigger.isBefore && trigger.isInsert) {
+            Set<Id> setAccId = new Set<Id>();
+            Map<Id, Account> mapAcc = new Map<Id, Account>();
+            for(Contract c: trigger.new){
+                if(c.AccountId != Null){
+                    setAccId.add(c.AccountId);
+                }
+            }
+            if(setAccId.size() > 0){
+                for(Account Acc: [Select Id, Name, Account_Executive__c, Account_Manager__c From Account Where Id IN: setAccId]){
+                    mapAcc.put(Acc.Id, Acc);        
+                }
+            }
+            for(Contract c: trigger.new){
+                if(mapAcc.get(c.AccountId).Account_Manager__c != Null){
+                    c.OwnerId = mapAcc.get(c.AccountId).Account_Manager__c;
+                }else if(mapAcc.get(c.AccountId).Account_Executive__c != Null){
+                    c.OwnerId = mapAcc.get(c.AccountId).Account_Executive__c;
+                }
+                
+                //set master flag to true for contract group info recordtype.
+                //if(c.RecordTypeId == P2EhUtility.getRecordTypeId(c.Id.getSObjectType().getDescribe().getName(), 'ContractGroupInfo')){
+                //c.IsMaster__c = true;
+                // }
+            }
+        }
+        //Upto this for PC-12992    
+        if(trigger.isUpdate){
+            if(P2EhUtility.hasContractTriggerToBeExecuted){
+                Set<Id> profileIds = new Set<Id>();        
+                for(Profile pro: [Select Id, Name From Profile Where Name = 'System Administrator'  OR Name='Group Configuration User' OR Name='Group Configuration Admin'  OR Name = 'Developer' OR Name = 'ETL User Permissions']){
+                    profileIds.add(pro.Id);            
+                }
+                for(Contract cont: trigger.new){
+                    if(!profileIds.contains(UserInfo.getProfileId()) && (cont.Status != trigger.oldMap.get(cont.Id).Status || cont.Renewal_Clause__c != trigger.oldMap.get(cont.Id).Renewal_Clause__c)){
+                        cont.addError('Unable to update Status or Contractual Renewal Clause. Please contact Administrator');
+                    }                
+                }
+            }       
+        }
+        //-- Ending code for Heat:1740298
+        if(trigger.isDelete){
+            P2EhContract.deleteContract(trigger.old);
+        }   
+
+        
+         if(trigger.isUpdate && trigger.isAfter){//modified for 3.1            
+            if(P2EhContract.updateCntrt==true)// condition added PC-15278
+            { 
+                P2EhContract.updateCntrt=false;
+                P2EhContract.UpdateProductType(trigger.new,trigger.oldmap); 
+            }
+            
+        }
+        
+        //GC- to update master case into group info-case field.
+        if(trigger.isInsert && trigger.isAfter){
+            //P2EhContract.updateCaseDetails(trigger.new);
+        }
+        
+        /**
+        * @description method to handle button hide/show based on the RecordType.
+        * @param {newContractlist} List of contract details.    
+        */
+        
+        if(trigger.isUpdate && trigger.isBefore){               
+            for (Contract cont : Trigger.new) {
+                Contract oldcont = Trigger.oldMap.get(cont.Id);
+                // system.debug('cont' + cont);   
+                // system.debug('oldcont' + oldcont);
+                if(oldcont.Renewal_Opportunity__c!=null && cont.status=='Terminated'){  //3.1 Start
+                    system.debug('into before trigger if');                    
+                    system.debug('oldcont.Renewal_Opportunity__c'+oldcont.Renewal_Opportunity__c);
+                    cont.Renewal_Opportunity__c=null;
+                }//   3.1 End 
+                approvalstatusold=oldcont.Approve_Status__c;
+                approvalstatusnew=cont.Approve_Status__c;
+                newContractlist.add(cont);
+                if (approvalstatusold != approvalstatusnew) {
+                    //P2EhContract.enableDisableApplyChangesBtn(newContractlist);
+                }
+            }
+            
+        }
+       
+       
+        if (!SkipTriggerUtil.isSkipValidationRule()) {  
+            if(trigger.isUpdate){
+                //Set<Id> oldMapId = trigger.oldMap.keySet();
+                GChObjectTriggerHelper.addContractLock(trigger.new, trigger.oldMap);
+            }
+            if(trigger.isDelete){
+               // Set<Id> oldMapId = trigger.oldMap.keySet();
+                GChObjectTriggerHelper.addContractLock(trigger.old,trigger.oldMap);
+            } 
+        }
+                
+        
+    }
+
+      //To Prevent Group Info creating duplicate record with same Group Number
+    if(trigger.isInsert && trigger.isBefore){
+        //Added skip locked validation to ETL for Simplified groups preload. 
+         //if (!SkipTriggerUtil.isSkipLockedValidation()) { 
+             GChObjectTriggerHelper.groupInfoduplicationcheck(trigger.new);
+         //}
+        
+    }
+}
